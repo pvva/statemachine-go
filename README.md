@@ -29,6 +29,9 @@ State machine enables you to define states, distinguished by string identifier, 
     onEnter := func(st statemachine.State) {
         // do something here
     }
+    onLeave := func(st statemachine.State) {
+        // do something here
+    }
 ```
 
 ## Get current state of machine
