@@ -2,21 +2,33 @@ This repository contains simple state machine implementation in Go.
 
 # State machine
 
-State machine enables you to define states, distinguished by string identifier, transitions between states, on enter and on leave events and conditions for certain transitions.
+State machine enables you to define states, distinguished by string identifier, transitions between states, on enter and on leave events with timeouts per each event, as well as timeout for being at state along with global timeout handler.
 
 ## Defining state machine
 ```
     sm := statemachine.NewStateMachine()
 
-    sm.AddState("01", []string{"02"}, onEnter, onLeave, condition)
-    sm.AddState("02", []string{"03", "04"}, onEnter, onLeave, condition)
+    sm.AddState(&statemachine.State{
+        ID: "01",
+        OnEnter: onEnter,
+        OnLeave: onLeave,
+        Selector: selector,
+    }
     ...
 ```
 
-## Defining condition function
 ```
-    condition := func(st statemachine.State) string {
-        if st.ID() == "02" {
+    sm := statemachine.NewStateMachine(func(sm *statemachine.StateMachine, timeoutType statemachine.TimeoutType) {
+        // handle timeout
+    })
+
+    ...
+```
+
+## Defining selector function
+```
+    selector := func(st *statemachine.State) string {
+        if st.ID == "02" {
             return "03"
         }
 
@@ -26,26 +38,24 @@ State machine enables you to define states, distinguished by string identifier, 
 
 ## Defining enter and leave events
 ```
-    onEnter := func(st statemachine.State) {
+    onEnter := func(sm *statemachine.StateMachine) {
         // do something here
+        currentState := sm.CurrentState()
+        ...
     }
-    onLeave := func(st statemachine.State) {
+    onLeave := func(sm *statemachine.StateMachine) {
         // do something here
     }
 ```
 
 ## Get current state of machine
 ```
-    var state statemachine.State
-
-    ...
-
-    state = sm.CurrentState()
+    state := sm.CurrentState()
 ```
 
 ## Activating and using state machine
 ```
-    sm.Bind()
+    sm.Start("01")
 
     ...
 
