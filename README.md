@@ -91,6 +91,7 @@ State machine enables you to define states, distinguished by string identifier, 
 ## Make machine advance automatically
 ```
     // try to advance each second
+    // state machine stops either on error or on reaching one of terminal states
     sm.AutoAdvance(time.Second, []string{"desired_terminal_state1", "desired_terminal_state2"})
 ```
 
