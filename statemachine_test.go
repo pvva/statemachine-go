@@ -182,3 +182,51 @@ func TestStateMachineTimeouts(t *testing.T) {
 
 	verifyActions(t, expected, actions)
 }
+
+func TestStateMachineAutoAdvance(t *testing.T) {
+	sm := NewStateMachine()
+
+	app := &TestApp{
+		desiredSequence: []string{"01", "02", "03", "05", "08", "09", "11"},
+	}
+
+	actions := []string{}
+
+	onEnter := func(sm *StateMachine) {
+		action := "enter and process " + sm.CurrentState().ID
+		actions = append(actions, action)
+	}
+
+	onLeave := func(sm *StateMachine) {
+		action := "leave " + sm.CurrentState().ID
+		actions = append(actions, action)
+	}
+
+	for i := 1; i <= 10; i++ {
+		stateId := strconv.Itoa(i)
+		if i < 10 {
+			stateId = "0" + stateId
+		}
+		sm.AddState(&State{
+			ID:       stateId,
+			OnEnter:  onEnter,
+			OnLeave:  onLeave,
+			Selector: app.SelectNextState,
+		})
+	}
+
+	sm.Start("01", true)
+	sm.AutoAdvance(time.Second, []string{"05"})
+
+	expected := []string{
+		"enter and process 01",
+		"leave 01",
+		"enter and process 02",
+		"leave 02",
+		"enter and process 03",
+		"leave 03",
+		"enter and process 05",
+	}
+
+	verifyActions(t, expected, actions)
+}
