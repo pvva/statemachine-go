@@ -136,7 +136,9 @@ func TestStateMachineTimeouts(t *testing.T) {
 		aLock.Lock()
 		actions = append(actions, action)
 		aLock.Unlock()
-		time.Sleep(time.Second * 2)
+		if sm.CurrentState().ID == "01" {
+			time.Sleep(time.Second * 2)
+		}
 	}
 
 	onLeave := func(sm *StateMachine) {
@@ -144,7 +146,9 @@ func TestStateMachineTimeouts(t *testing.T) {
 		aLock.Lock()
 		actions = append(actions, action)
 		aLock.Unlock()
-		time.Sleep(time.Second * 2)
+		if sm.CurrentState().ID == "01" {
+			time.Sleep(time.Second * 2)
+		}
 	}
 
 	sm.AddState(&State{
@@ -159,7 +163,16 @@ func TestStateMachineTimeouts(t *testing.T) {
 		},
 	})
 	sm.AddState(&State{
-		ID:      "02",
+		ID:           "02",
+		OnEnter:      onEnter,
+		OnLeave:      onLeave,
+		StateTimeout: time.Second,
+		Selector: func(state *State) string {
+			return "03"
+		},
+	})
+	sm.AddState(&State{
+		ID:      "03",
 		OnEnter: onEnter,
 		OnLeave: onLeave,
 	})
@@ -170,6 +183,8 @@ func TestStateMachineTimeouts(t *testing.T) {
 	time.Sleep(time.Second * 2)
 	// trigger leave timeout
 	sm.Advance()
+	// trigger normal transfer with timeout cancellation
+	sm.Advance()
 
 	expected := []string{
 		"enter 01",
@@ -178,6 +193,8 @@ func TestStateMachineTimeouts(t *testing.T) {
 		"leave 01",
 		"timeout for 01 on type leave",
 		"enter 02",
+		"leave 02",
+		"enter 03",
 	}
 
 	verifyActions(t, expected, actions)
@@ -226,6 +243,135 @@ func TestStateMachineAutoAdvance(t *testing.T) {
 		"enter and process 03",
 		"leave 03",
 		"enter and process 05",
+	}
+
+	verifyActions(t, expected, actions)
+}
+
+func TestStateMachineErrorHandling(t *testing.T) {
+	actions := []string{}
+
+	sm := NewStateMachine()
+	sm.WithErrorHandler(func(err interface{}, eventType EventType) {
+		errS, _ := err.(string)
+		actions = append(actions, errS)
+	})
+
+	onEnter := func(sm *StateMachine) {
+		if sm.CurrentState().ID == "02" {
+			panic("explicit panic")
+		}
+
+		action := "enter " + sm.CurrentState().ID
+		actions = append(actions, action)
+	}
+
+	onLeave := func(sm *StateMachine) {
+		action := "leave " + sm.CurrentState().ID
+		actions = append(actions, action)
+	}
+
+	sm.AddState(&State{
+		ID:      "01",
+		OnEnter: onEnter,
+		OnLeave: onLeave,
+		Selector: func(state *State) string {
+			return "02"
+		},
+	})
+	sm.AddState(&State{
+		ID:      "02",
+		OnEnter: onEnter,
+		OnLeave: onLeave,
+		Selector: func(state *State) string {
+			return NoState
+		},
+	})
+
+	sm.Start("01", true)
+	sm.Advance()
+
+	expected := []string{
+		"enter 01",
+		"leave 01",
+		"explicit panic",
+	}
+
+	verifyActions(t, expected, actions)
+}
+
+func TestStateMachineAutoAdvanceErrorHandling(t *testing.T) {
+	actions := []string{}
+	state2counter := 0
+
+	sm := NewStateMachine()
+	sm.WithErrorHandler(func(err interface{}, eventType EventType) {
+		errS, _ := err.(string)
+		actions = append(actions, errS)
+	})
+
+	app := &TestApp{
+		desiredSequence: []string{"01", "02", "03", "05", "08", "09", "11"},
+	}
+
+	onEnter := func(sm *StateMachine) {
+		st := sm.CurrentState().ID
+		if st == "03" {
+			panic("explicit panic at 03")
+		}
+
+		action := "enter and process " + sm.CurrentState().ID
+		actions = append(actions, action)
+	}
+
+	onLeave := func(sm *StateMachine) {
+		action := "leave " + sm.CurrentState().ID
+		actions = append(actions, action)
+	}
+
+	for i := 1; i <= 10; i++ {
+		stateId := strconv.Itoa(i)
+		if i < 10 {
+			stateId = "0" + stateId
+		}
+		sm.AddState(&State{
+			ID:      stateId,
+			OnEnter: onEnter,
+			OnLeave: onLeave,
+			Selector: func(state *State) string {
+				ns := NoState
+				for i := 0; i < len(app.desiredSequence)-1; i++ {
+					if app.desiredSequence[i] == state.ID {
+						ns = app.desiredSequence[i+1]
+					}
+				}
+
+				if ns == "03" {
+					if state2counter < 2 {
+						state2counter++
+						action := "pending in 02"
+						actions = append(actions, action)
+
+						return NoState
+					}
+				}
+
+				return ns
+			},
+		})
+	}
+
+	sm.Start("01", true)
+	sm.AutoAdvance(time.Second, []string{"09"})
+
+	expected := []string{
+		"enter and process 01",
+		"leave 01",
+		"enter and process 02",
+		"pending in 02",
+		"pending in 02",
+		"leave 02",
+		"explicit panic at 03",
 	}
 
 	verifyActions(t, expected, actions)

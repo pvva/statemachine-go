@@ -7,6 +7,10 @@ State machine enables you to define states, distinguished by string identifier, 
 ## Defining state machine
 ```
     sm := statemachine.NewStateMachine()
+    // optional error handler
+    sm.WithErrorHandler(func(err interface{}, eventType EventType) {
+        ...
+    })
 
     sm.AddState(&statemachine.State{
         ID: "01",
@@ -14,11 +18,20 @@ State machine enables you to define states, distinguished by string identifier, 
         OnLeave: onLeave,
         Selector: selector,
     }
+    sm.AddState(&statemachine.State{
+        ID: "02",
+        OnEnter: onEnter,
+        OnLeave: onLeave,
+		OnEnterTimeout: time.Second,
+		OnLeaveTimeout: time.Second,
+		StateTimeout:   time.Second * 10,
+        Selector: selector,
+    }
     ...
 ```
 
 ```
-    sm := statemachine.NewStateMachine(func(sm *statemachine.StateMachine, timeoutType statemachine.TimeoutType) {
+    sm := statemachine.NewStateMachine(func(sm *statemachine.StateMachine, eventType statemachine.EventType) {
         // handle timeout
     })
 
@@ -59,20 +72,26 @@ State machine enables you to define states, distinguished by string identifier, 
 
     ...
 
-    if sm.Advance() {
+    if res, err := sm.Advance(); res && err != nil {
         // state machine has advanced to next state
     } else {
-        // state machine has stopped
+        // state machine has stopped or errored
     }
 ```
 
 ## Emergency switch to chosen state
 ```
     // by default such switch doesn't trigger events
-    sm.EmergencySwitch("03")
+    res, err := sm.EmergencySwitch("03")
 
     // energency switch with events triggering
-    sm.EmergencySwitch("03", true)
+    res, err := sm.EmergencySwitch("03", true)
+```
+
+## Make machine advance automatically
+```
+    // try to advance each second
+    sm.AutoAdvance(time.Second, []string{"desired_terminal_state1", "desired_terminal_state2"})
 ```
 
 For complete example see test.

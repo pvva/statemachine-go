@@ -33,14 +33,15 @@ type State struct {
 }
 
 type StateMachine struct {
-	current        unsafe.Pointer
-	states         map[string]*State
-	advanceLock    sync.Mutex
-	onTimeout      TimeoutEvent
-	onError        ErrorHandler
-	timeoutTracker chan struct{}
-	timeoutLock    sync.Mutex
-	eventLock      sync.Mutex
+	current              unsafe.Pointer
+	states               map[string]*State
+	advanceLock          sync.Mutex
+	onTimeout            TimeoutEvent
+	onError              ErrorHandler
+	timeoutTracker       chan struct{}
+	timeoutTrackerActive bool
+	timeoutLock          sync.Mutex
+	eventLock            sync.Mutex
 }
 
 func NewStateMachine(timeoutEvent ...TimeoutEvent) *StateMachine {
@@ -78,30 +79,25 @@ func (sm *StateMachine) runStateEvent(event StateEvent, timeout time.Duration, e
 	}
 	var errPtr unsafe.Pointer
 
+	errHandler := func() {
+		errLocal := recover()
+		if errLocal != nil && sm.onError != nil {
+			atomic.StorePointer(&errPtr, unsafe.Pointer(&errLocal))
+			sm.onError(errLocal, eventType)
+		}
+	}
+
 	if timeout.Nanoseconds() == 0 {
 		func() {
-			defer func() {
-				errLocal := recover()
-				atomic.StorePointer(&errPtr, unsafe.Pointer(&errLocal))
-				if errLocal != nil && sm.onError != nil {
-					sm.onError(errLocal, eventType)
-				}
-			}()
-
+			defer errHandler()
 			event(sm)
 		}()
 	} else {
 		ch := make(chan struct{}, 1)
 		go func() {
-			defer func() {
-				errLocal := recover()
-				atomic.StorePointer(&errPtr, unsafe.Pointer(&errLocal))
-				if errLocal != nil && sm.onError != nil {
-					sm.onError(errLocal, eventType)
-				}
-			}()
-
+			defer errHandler()
 			event(sm)
+
 			_, ok := <-ch
 			if ok {
 				ch <- struct{}{}
@@ -146,12 +142,15 @@ func (sm *StateMachine) enterState(state *State, triggerEvents bool) (bool, inte
 		if state.StateTimeout.Nanoseconds() > 0 {
 			sm.timeoutLock.Lock()
 			sm.timeoutTracker = make(chan struct{}, 1)
+			sm.timeoutTrackerActive = true
 			sm.timeoutLock.Unlock()
 			go func() {
 				defer func() {
 					sm.timeoutLock.Lock()
-					close(sm.timeoutTracker)
-					sm.timeoutTracker = nil
+					if sm.timeoutTrackerActive {
+						close(sm.timeoutTracker)
+						sm.timeoutTrackerActive = false
+					}
 					sm.timeoutLock.Unlock()
 				}()
 
@@ -177,9 +176,9 @@ func (sm *StateMachine) internalSwitch(toState string, triggerEvents bool) (bool
 	}
 
 	sm.timeoutLock.Lock()
-	if sm.timeoutTracker != nil {
+	if sm.timeoutTrackerActive {
 		close(sm.timeoutTracker)
-		sm.timeoutTracker = nil
+		sm.timeoutTrackerActive = false
 	}
 	sm.timeoutLock.Unlock()
 
