@@ -10,15 +10,16 @@ import (
 const NoState = ""
 
 type StateEvent func(sm *StateMachine)
-type TimeoutEvent func(sm *StateMachine, timeoutType TimeoutType)
+type TimeoutEvent func(sm *StateMachine, eventType EventType)
 type StateSelector func(state *State) string
+type ErrorHandler func(err interface{}, eventType EventType)
 
-type TimeoutType int
+type EventType int
 
 const (
-	TimeoutEnter TimeoutType = iota
-	TimeoutLeave
-	TimeoutState
+	EventEnter EventType = iota
+	EventLeave
+	EventState
 )
 
 type State struct {
@@ -36,8 +37,10 @@ type StateMachine struct {
 	states         map[string]*State
 	advanceLock    sync.Mutex
 	onTimeout      TimeoutEvent
+	onError        ErrorHandler
 	timeoutTracker chan struct{}
 	timeoutLock    sync.Mutex
+	eventLock      sync.Mutex
 }
 
 func NewStateMachine(timeoutEvent ...TimeoutEvent) *StateMachine {
@@ -52,58 +55,93 @@ func NewStateMachine(timeoutEvent ...TimeoutEvent) *StateMachine {
 	}
 }
 
+func (sm *StateMachine) WithErrorHandler(eh ErrorHandler) {
+	sm.onError = eh
+}
+
 func (sm *StateMachine) AddState(state *State) {
 	sm.states[state.ID] = state
 }
 
-func (sm *StateMachine) Start(initialState string) bool {
-	return sm.internalSwitch(initialState, true)
+func (sm *StateMachine) Start(initialState string, triggerEvents ...bool) (bool, interface{}) {
+	doTrigger := false
+	if len(triggerEvents) > 0 {
+		doTrigger = triggerEvents[0]
+	}
+
+	return sm.internalSwitch(initialState, doTrigger)
 }
 
-func (sm *StateMachine) runStateEventWithTimeout(event StateEvent, timeout time.Duration, timeoutType TimeoutType) {
+func (sm *StateMachine) runStateEvent(event StateEvent, timeout time.Duration, eventType EventType) interface{} {
 	if event == nil {
-		return
+		return nil
+	}
+	var errPtr unsafe.Pointer
+
+	if timeout.Nanoseconds() == 0 {
+		func() {
+			defer func() {
+				errLocal := recover()
+				atomic.StorePointer(&errPtr, unsafe.Pointer(&errLocal))
+				if errLocal != nil && sm.onError != nil {
+					sm.onError(errLocal, eventType)
+				}
+			}()
+
+			event(sm)
+		}()
+	} else {
+		ch := make(chan struct{}, 1)
+		go func() {
+			defer func() {
+				errLocal := recover()
+				atomic.StorePointer(&errPtr, unsafe.Pointer(&errLocal))
+				if errLocal != nil && sm.onError != nil {
+					sm.onError(errLocal, eventType)
+				}
+			}()
+
+			event(sm)
+			_, ok := <-ch
+			if ok {
+				ch <- struct{}{}
+			}
+		}()
+
+		select {
+		case <-ch:
+			close(ch)
+		case <-time.After(timeout):
+			close(ch)
+			if sm.onTimeout != nil {
+				sm.onTimeout(sm, eventType)
+			}
+		}
 	}
 
-	ch := make(chan struct{}, 1)
-	go func() {
-		event(sm)
-		_, ok := <-ch
-		if ok {
-			ch <- struct{}{}
-		}
-	}()
+	err := (*interface{})(atomic.LoadPointer(&errPtr))
 
-	select {
-	case <-ch:
-		close(ch)
-	case <-time.After(timeout):
-		close(ch)
-		if sm.onTimeout != nil {
-			sm.onTimeout(sm, timeoutType)
-		}
+	if err == nil {
+		return nil
 	}
+
+	return *err
 }
 
-func (sm *StateMachine) leaveState(state *State, triggerEvents bool) {
+func (sm *StateMachine) leaveState(state *State, triggerEvents bool) interface{} {
 	if state != nil && triggerEvents && state.OnLeave != nil {
-		if state.OnLeaveTimeout.Nanoseconds() > 0 {
-			sm.runStateEventWithTimeout(state.OnLeave, state.OnLeaveTimeout, TimeoutLeave)
-		} else {
-			state.OnLeave(sm)
-		}
+		return sm.runStateEvent(state.OnLeave, state.OnLeaveTimeout, EventLeave)
 	}
+
+	return nil
 }
 
-func (sm *StateMachine) enterState(state *State, triggerEvents bool) bool {
+func (sm *StateMachine) enterState(state *State, triggerEvents bool) (bool, interface{}) {
+	var err interface{}
 	atomic.StorePointer(&sm.current, unsafe.Pointer(state))
 	if state != nil {
 		if state.OnEnter != nil && triggerEvents {
-			if state.OnEnterTimeout.Nanoseconds() > 0 {
-				sm.runStateEventWithTimeout(state.OnEnter, state.OnEnterTimeout, TimeoutEnter)
-			} else {
-				state.OnEnter(sm)
-			}
+			err = sm.runStateEvent(state.OnEnter, state.OnEnterTimeout, EventEnter)
 		}
 		if state.StateTimeout.Nanoseconds() > 0 {
 			sm.timeoutLock.Lock()
@@ -121,19 +159,23 @@ func (sm *StateMachine) enterState(state *State, triggerEvents bool) bool {
 				case <-sm.timeoutTracker:
 				case <-time.After(state.StateTimeout):
 					if sm.onTimeout != nil {
-						sm.onTimeout(sm, TimeoutState)
+						sm.onTimeout(sm, EventState)
 					}
 				}
 			}()
 		}
 
-		return true
+		return true, err
 	}
 
-	return false
+	return false, err
 }
 
-func (sm *StateMachine) internalSwitch(toState string, triggerEvents bool) bool {
+func (sm *StateMachine) internalSwitch(toState string, triggerEvents bool) (bool, interface{}) {
+	if toState == NoState {
+		return false, nil
+	}
+
 	sm.timeoutLock.Lock()
 	if sm.timeoutTracker != nil {
 		close(sm.timeoutTracker)
@@ -141,25 +183,25 @@ func (sm *StateMachine) internalSwitch(toState string, triggerEvents bool) bool 
 	}
 	sm.timeoutLock.Unlock()
 
-	sm.leaveState(sm.CurrentState(), triggerEvents)
+	sm.eventLock.Lock()
+	err := sm.leaveState(sm.CurrentState(), triggerEvents)
+	sm.eventLock.Unlock()
 
-	if toState != NoState {
-		nState, _ := sm.states[toState]
-
-		return sm.enterState(nState, triggerEvents)
+	if err != nil {
+		return false, err
 	}
 
-	return false
+	nState, _ := sm.states[toState]
+
+	result := false
+	sm.eventLock.Lock()
+	result, err = sm.enterState(nState, triggerEvents)
+	sm.eventLock.Unlock()
+
+	return result, err
 }
 
-func (sm *StateMachine) Advance(async ...bool) bool {
-	sm.advanceLock.Lock()
-	defer sm.advanceLock.Unlock()
-
-	if sm.current == nil {
-		return false
-	}
-
+func (sm *StateMachine) getNextState() string {
 	advanceId := NoState
 	current := sm.CurrentState()
 
@@ -167,7 +209,18 @@ func (sm *StateMachine) Advance(async ...bool) bool {
 		advanceId = current.Selector(current)
 	}
 
-	return sm.internalSwitch(advanceId, true)
+	return advanceId
+}
+
+func (sm *StateMachine) Advance() (bool, interface{}) {
+	sm.advanceLock.Lock()
+	defer sm.advanceLock.Unlock()
+
+	if sm.current == nil {
+		return false, nil
+	}
+
+	return sm.internalSwitch(sm.getNextState(), true)
 }
 
 func (sm *StateMachine) CurrentState() *State {
@@ -179,9 +232,33 @@ func (sm *StateMachine) CurrentState() *State {
 	return (*State)(ptr)
 }
 
-func (sm *StateMachine) EmergencySwitch(stateId string, triggerEvents ...bool) bool {
+func (sm *StateMachine) EmergencySwitch(stateId string, triggerEvents ...bool) (bool, interface{}) {
 	sm.advanceLock.Lock()
 	defer sm.advanceLock.Unlock()
 
 	return sm.internalSwitch(stateId, len(triggerEvents) > 0 && triggerEvents[0])
+}
+
+func (sm *StateMachine) AutoAdvance(tryPeriod time.Duration, terminalStates []string) {
+	go func() {
+		for {
+			result, err := sm.Advance()
+			if err != nil {
+				// stop state machine
+				return
+			}
+			if result {
+				cs := sm.CurrentState().ID
+				for _, ts := range terminalStates {
+					if cs == ts {
+						// state machine has reached one of terminal states, stop it
+						return
+					}
+				}
+			} else {
+				// cannot advance yet, wait
+				time.Sleep(tryPeriod)
+			}
+		}
+	}()
 }

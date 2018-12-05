@@ -65,12 +65,16 @@ func TestStateMachine(t *testing.T) {
 		})
 	}
 
-	if sm.Start("01") {
+	if res, _ := sm.Start("01", true); res {
 		action := "process current state: " + sm.CurrentState().ID
 		actions = append(actions, action)
 	}
 
-	for sm.Advance() {
+	for {
+		res, _ := sm.Advance()
+		if !res {
+			break
+		}
 		action := "process current state: " + sm.CurrentState().ID
 		actions = append(actions, action)
 	}
@@ -108,20 +112,20 @@ func TestStateMachineTimeouts(t *testing.T) {
 	aLock := sync.Mutex{}
 	actions := []string{}
 
-	timeoutTypeStr := func(tt TimeoutType) string {
+	timeoutTypeStr := func(tt EventType) string {
 		switch tt {
-		case TimeoutEnter:
+		case EventEnter:
 			return "enter"
-		case TimeoutLeave:
+		case EventLeave:
 			return "leave"
-		case TimeoutState:
+		case EventState:
 			return "state"
 		}
 
 		return ""
 	}
 
-	sm := NewStateMachine(func(sm *StateMachine, timeoutType TimeoutType) {
+	sm := NewStateMachine(func(sm *StateMachine, timeoutType EventType) {
 		aLock.Lock()
 		actions = append(actions, "timeout for "+sm.CurrentState().ID+" on type "+timeoutTypeStr(timeoutType))
 		aLock.Unlock()
@@ -161,7 +165,7 @@ func TestStateMachineTimeouts(t *testing.T) {
 	})
 
 	// trigger enter timeout
-	sm.Start("01")
+	sm.Start("01", true)
 	// trigger being at state timeout
 	time.Sleep(time.Second * 2)
 	// trigger leave timeout
