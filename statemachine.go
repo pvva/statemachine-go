@@ -52,7 +52,7 @@ func NewStateMachine(timeoutEvent ...TimeoutEvent) *StateMachine {
 	return &StateMachine{
 		states:         make(map[string]*State),
 		onTimeout:      event,
-		timeoutTracker: nil,
+		timeoutTracker: make(chan struct{}, 1),
 	}
 }
 
@@ -141,14 +141,13 @@ func (sm *StateMachine) enterState(state *State, triggerEvents bool) (bool, inte
 		}
 		if state.StateTimeout.Nanoseconds() > 0 {
 			sm.timeoutLock.Lock()
-			sm.timeoutTracker = make(chan struct{}, 1)
 			sm.timeoutTrackerActive = true
 			sm.timeoutLock.Unlock()
 			go func() {
 				defer func() {
 					sm.timeoutLock.Lock()
 					if sm.timeoutTrackerActive {
-						close(sm.timeoutTracker)
+						sm.timeoutTracker <- struct{}{}
 						sm.timeoutTrackerActive = false
 					}
 					sm.timeoutLock.Unlock()
@@ -177,7 +176,7 @@ func (sm *StateMachine) internalSwitch(toState string, triggerEvents bool) (bool
 
 	sm.timeoutLock.Lock()
 	if sm.timeoutTrackerActive {
-		close(sm.timeoutTracker)
+		sm.timeoutTracker <- struct{}{}
 		sm.timeoutTrackerActive = false
 	}
 	sm.timeoutLock.Unlock()
