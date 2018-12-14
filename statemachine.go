@@ -237,19 +237,19 @@ func (sm *StateMachine) EmergencySwitch(stateId string, triggerEvents ...bool) (
 	return sm.internalSwitch(stateId, len(triggerEvents) > 0 && triggerEvents[0])
 }
 
-func (sm *StateMachine) AutoAdvance(tryPeriod time.Duration, terminalStates []string) {
+func (sm *StateMachine) AutoAdvance(tryPeriod time.Duration, terminalStates []string) interface{} {
 	for {
 		result, err := sm.Advance()
 		if err != nil {
 			// stop state machine
-			return
+			return err
 		}
 		if result {
 			cs := sm.CurrentState().ID
 			for _, ts := range terminalStates {
 				if cs == ts {
 					// state machine has reached one of terminal states, stop it
-					return
+					return nil
 				}
 			}
 		} else {

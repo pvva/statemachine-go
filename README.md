@@ -92,7 +92,12 @@ State machine enables you to define states, distinguished by string identifier, 
 ```
     // try to advance each second
     // state machine stops either on error or on reaching one of terminal states
-    sm.AutoAdvance(time.Second, []string{"desired_terminal_state1", "desired_terminal_state2"})
+    result := sm.AutoAdvance(time.Second, []string{"desired_terminal_state1", "desired_terminal_state2"})
+    if result != nil {
+        // state machine stopped with error
+    } else {
+        // state machine finished normally
+    }
 ```
 
 For complete example see test.
