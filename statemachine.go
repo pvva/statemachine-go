@@ -44,16 +44,15 @@ type StateMachine struct {
 	eventLock            sync.Mutex
 }
 
-func NewStateMachine(timeoutEvent ...TimeoutEvent) *StateMachine {
-	var event TimeoutEvent
-	if len(timeoutEvent) > 0 {
-		event = timeoutEvent[0]
-	}
+func NewStateMachine() *StateMachine {
 	return &StateMachine{
 		states:         make(map[string]*State),
-		onTimeout:      event,
 		timeoutTracker: make(chan struct{}, 1),
 	}
+}
+
+func (sm *StateMachine) WithTimeoutHandler(th TimeoutEvent) {
+	sm.onTimeout = th
 }
 
 func (sm *StateMachine) WithErrorHandler(eh ErrorHandler) {

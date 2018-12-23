@@ -125,7 +125,8 @@ func TestStateMachineTimeouts(t *testing.T) {
 		return ""
 	}
 
-	sm := NewStateMachine(func(sm *StateMachine, timeoutType EventType) {
+	sm := NewStateMachine()
+	sm.WithTimeoutHandler(func(sm *StateMachine, timeoutType EventType) {
 		aLock.Lock()
 		actions = append(actions, "timeout for "+sm.CurrentState().ID+" on type "+timeoutTypeStr(timeoutType))
 		aLock.Unlock()
