@@ -238,6 +238,7 @@ func (sm *StateMachine) EmergencySwitch(stateId string, triggerEvents ...bool) (
 
 func (sm *StateMachine) AutoAdvance(tryPeriod time.Duration, terminalStates []string) interface{} {
 	for {
+		ct := time.Now()
 		result, err := sm.Advance()
 		if err != nil {
 			// stop state machine
@@ -253,7 +254,10 @@ func (sm *StateMachine) AutoAdvance(tryPeriod time.Duration, terminalStates []st
 			}
 		} else {
 			// cannot advance yet, wait
-			time.Sleep(tryPeriod)
+			passed := time.Now().Sub(ct)
+			if passed.Nanoseconds() < tryPeriod.Nanoseconds() {
+				time.Sleep(time.Duration(tryPeriod.Nanoseconds() - passed.Nanoseconds()))
+			}
 		}
 	}
 }
